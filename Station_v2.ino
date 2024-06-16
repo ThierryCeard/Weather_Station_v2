@@ -25,26 +25,29 @@ BMP180I2C bmp(I2C_ADDRESS);
 // Pour Debug decommenter les lignes suivantes
 #define DEBUG_TRACE 
 #define WIFI_CONNECTION 
-//#define DEBUG_HTTP 
+#define DEBUG_HTTP 
+#define DEBUG_HTTP2
 //#define TRACE_DHT 
-#define DEBUG_WIND_DIR 
+//#define DEBUG_WIND_DIR 
 //#define DEBUG_WATER
 //#define TIMER
 //#define WIFI_TRACE
-//#define BMP180
+//#define BMP180  --> Bug on Serial print
 
 
 // Parametres
 #define SAMPLE_RETRY  1e3               // Temps d'attente avant renvoi sur requete invalide
 #define COUNT_RETRY   2                 // Nombre de tentative avant de passer a la suite
-#define SLEEPING_TIME 40               // in s
+#define SLEEPING_TIME 300               // in s
 #define WATER_BOUNCING_TIMEMS 500          // Time in ms to debounced 2 water drop
 #define SCREEN_LIGHT_TIME 10           // in s time the display is on
 #define SSID_NETWORK  "ARRIS-CEARD"
 #define PASS_WIFI     "49681154"        // "49681154"          
 #define SERIAL_RATE   115200
 #define DHT_RETRY     5
-#define URL           "http://thierryceard.synology.me/Meteo/upload_data_JSON.php" // Web Service URL to manage data
+#define URL           "http://192.168.1.19/Meteo/upload_data_JSON.php" // Web Service URL to manage data
+//#define URL           "http://192.168.1.19/Meteo/hello.php" // Web Service URL to manage data
+ 
 #define HOSTNAME      "OUTER-STATION-456098"
 
 // Les pins de branchement 
@@ -155,36 +158,51 @@ void loop() {
 if (goodToSend==true) {
   // object clean up to avoid memory leak
   object.clear();
+  
   #ifdef DEBUG_TRACE 
-  Serial.println("Entering Send data process");
+  Serial.println("Entering collecting data process");
   #endif
     
   // Get Temp and humidity populated in JSON
   getDHTMeasure();
 
   // Get Temp and pressure populated in JSON
- // getBMP180Measure();
+  getBMP180Measure();
 
   // Get Wind speed and direction and Rain water populated in JSON
   getWindAndWater();
 
-  // Send JSON to the server 
+  // Connect to WIFI via PSW or WPS
+  // WiFi.printDiag(Serial);
+  bool isWifiConnected = connectWifi();
+  if (isWifiConnected) {
+    #ifdef WIFI_CONNECTION
+    Serial.print("Wifi Connection Status : ");
+    Serial.println(isWifiConnected);
+    delay(100);
+    #endif
+    // Send HTTP Request to the server 
+    goodToSend=!sendHTTPRequest();
+    
+  }
+
   
-  goodToSend=!sendHTTPRequest();
-  
-    //  Sleep mode entering :
+      //  Sleep mode entering :
     #ifdef WIFI_CONNECTION
     Serial.println("Entering Sleep Mode");
     #endif
     
     WiFi.mode( WIFI_OFF );
+    WiFi.forceSleepBegin();
+    delay(10);
     
-    #ifdef WIFI_CONNECTION
-    WiFi.printDiag(Serial);
-    #endif
     
-    //WiFi.forceSleepBegin();
-    delay(100);
+   /*Serial.println("Deep Sleep Begin");
+   WiFi.disconnect( true );
+   delay( 1 );
+
+    // WAKE_RF_DISABLED to keep the WiFi radio disabled when we wake up
+    ESP.deepSleep( SLEEPING_TIME/2*1000000, RF_DEFAULT );*/
   }
 }
 
@@ -291,56 +309,58 @@ void getWindAndWater() {
 
 
 bool sendHTTPRequest() {
-  // WiFi.printDiag(Serial);
-  // Connect to WIFI via PSW or WPS
-  bool isWifiConnected = connectWifi();
-  if (!isWifiConnected) {
-    #ifdef WIFI_CONNECTION
-    Serial.print("Wifi Connection Status : ");
-    Serial.print(isWifiConnected);
-    delay(100);
-    #endif
-    return false;}
-
+ 
   // send the JSON formatted data off all the sensor to the HTTP Web service
   // Return true if http 200 is recieved 
-  HTTPClient http;  
   WiFiClient wificlient;
+  HTTPClient http;  
+ 
   http.begin(wificlient,URL);      
   http.addHeader("Content-Type", "application/json"); 
   int httpCode=0;  
   String json;
+  
   serializeJson(object,json);
   
+  
   while ((httpCode!=200)&&(Retry<=COUNT_RETRY)) {
-   
    httpCode = http.POST(json);   //Send the request
    
-   #ifdef DEBUG_HTTP
+
+   #ifdef DEBUG_HTTP2
    String payload = http.getString();  //Get the response payload 
    Serial.print("POST : ");  Serial.println(json);
    Serial.print("Http code : "); Serial.println(httpCode);   //Print HTTP return code
    Serial.print("Payload   : "); Serial.println(payload);    //Print request response payload
    Serial.print("Retry :");Serial.println(Retry);
    #endif
+   #ifdef DEBUG_TRACE
+   Serial.print("Http code : "); Serial.println(httpCode);   //Print HTTP return code
+   #endif
    delay(SAMPLE_RETRY);
    Retry++;
    }
   Retry=0;
   http.end();  //Close connection
-  if (httpCode==200) {
+  wificlient.stop();
+  
+  
+  delay(500);
+  if (httpCode!=200) {
     Water=0; // Water reset to 0 between each request
     #ifdef DEBUG_HTTP
-    Serial.println("Exiting with true");  
-    #endif
-    return true;  
-    }
-  else {
-    #ifdef DEBUG_HTTP
-    Serial.print("Exiting with false"); 
+    Serial.println("Exiting with false");  
     #endif
     
-    return false;}
+    return false;  
+    }
+
+    #ifdef DEBUG_HTTP
+    Serial.println("Exiting with true");
+    #endif  
+    
+    return true;
+    
 }
 
 bool connectWifi() {
@@ -356,7 +376,7 @@ bool connectWifi() {
   WiFi.setAutoReconnect(true);
   delay(100);
   
-   #ifdef WIFI_CONNECTION
+   #ifdef WIFI_CONNECTION2
     WiFi.printDiag(Serial);
     delay(100);
     #endif
@@ -397,9 +417,6 @@ bool connectWifi() {
       if (WiFi.status() == WL_CONNECTED) {     
         #ifdef WIFI_CONNECTION
         Serial.print("Connected with option :");Serial.println(i);
-        String json;
-        serializeJson(object,json);
-        Serial.println(json);
         #endif
         return true;
 		
